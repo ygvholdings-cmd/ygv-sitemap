@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """YGV Cash Buyers - Automated Blog Publisher (GitHub Actions)"""
-import os, re, sys, json, base64
+import os, re, sys, json, base64, time
 from datetime import datetime, timezone
 
 try:
@@ -14,6 +14,7 @@ except ImportError:
     import subprocess; subprocess.run(["pip","install","anthropic","-q"],check=True); import anthropic
 
 TOPICS = [
+    # Core topics (0-19)
     "how to sell your house fast in Cincinnati Ohio",
     "what cash home buyers look for in Cincinnati",
     "how the cash home buying process works step by step",
@@ -34,6 +35,27 @@ TOPICS = [
     "why Cincinnati homeowners choose cash buyers over realtors",
     "how to sell a house with code violations in Cincinnati",
     "selling your home fast during a job relocation from Cincinnati",
+    # Neighborhood-specific topics (20-39)
+    "sell my house fast in Hyde Park Cincinnati Ohio",
+    "cash home buyers in Blue Ash Ohio",
+    "sell your home fast in Mason Ohio",
+    "how to sell a house fast in Norwood Ohio",
+    "cash buyers for homes in Anderson Township Ohio",
+    "sell my house fast in West Chester Ohio",
+    "cash home buyers in Loveland Ohio",
+    "how to sell a house fast in Fairfield Ohio",
+    "sell your home fast in Montgomery Ohio",
+    "cash buyers in Oakley Cincinnati Ohio",
+    "sell my house fast in Kenwood Cincinnati Ohio",
+    "how to sell a home in Madeira Ohio for cash",
+    "cash home buyers in Sharonville Ohio",
+    "selling a house fast in Milford Ohio",
+    "sell my house fast in Symmes Township Ohio",
+    "how to sell a house fast in Colerain Township Ohio",
+    "cash home buyers in Reading Ohio",
+    "sell your house fast in Cheviot Ohio",
+    "how to sell a home in Price Hill Cincinnati",
+    "cash home buyers in College Hill Cincinnati Ohio",
 ]
 
 IMG = {
@@ -72,19 +94,24 @@ def get_published_slugs():
 
 def generate_blog_post(topic, slugs):
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    slug_hint = (
-        "\nFor internal linking, link to one of these published posts if relevant: "
-        + ", ".join(slugs[:6])
-    ) if slugs else ""
+
+    slug_hint = ""
+    if len(slugs) >= 3:
+        slug_hint = (
+            "\nFor internal linking, naturally embed 2-3 links within the body to these "
+            "published posts where topically relevant "
+            "(use full URL format: https://ygvcashbuyers.com/post/SLUG): "
+            + ", ".join(slugs[:15])
+        )
 
     prompt = (
         f"Write a high-quality SEO blog post for YGV Cash Buyers (ygvcashbuyers.com), "
         f"a cash home buying company in Cincinnati, Ohio.\n\n"
         f"Topic: {topic}\n\n"
         f"Requirements:\n"
-        f"- 650-850 words, warm and helpful tone, NOT salesy\n"
+        f"- 950-1150 words, warm and helpful tone, NOT salesy\n"
         f"- First 2-3 sentences directly answer the topic (no preamble like 'In this post...')\n"
-        f"- Use ## for H2 subheadings throughout\n"
+        f"- Use ## for H2 subheadings throughout (4-6 subheadings)\n"
         f"- Do NOT include the post title in the body\n"
         f"- Reference Cincinnati, Hamilton County, or Greater Cincinnati naturally\n"
         f"- End with a soft CTA mentioning YGV Cash Buyers"
@@ -100,12 +127,18 @@ def generate_blog_post(topic, slugs):
         f"Q: [question]\n"
         f"A: [answer in 1-2 sentences]\n"
         f"Q: [question]\n"
+        f"A: [answer in 1-2 sentences]\n"
+        f"Q: [question]\n"
+        f"A: [answer in 1-2 sentences]\n"
+        f"Q: [question]\n"
+        f"A: [answer in 1-2 sentences]\n"
+        f"Q: [question]\n"
         f"A: [answer in 1-2 sentences]"
     )
 
     msg = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=2048,
+        max_tokens=3000,
         messages=[{"role": "user", "content": prompt}]
     )
     return msg.content[0].text
@@ -140,26 +173,68 @@ def sc(d):
     return "\n" + ST + "\n" + json.dumps(d, indent=2) + "\n" + ET
 
 
-def main():
-    # Step 1: Determine topic
-    slugs = get_published_slugs()
-    idx = len(slugs) % len(TOPICS)
-    topic = TOPICS[idx]
-    print(f"Published posts: {len(slugs)} -> topic index {idx}: {topic}")
+def get_gbp_access_token():
+    cid = os.environ.get("GOOGLE_CLIENT_ID", "")
+    cs  = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+    rt  = os.environ.get("GOOGLE_REFRESH_TOKEN", "")
+    if not all([cid, cs, rt]):
+        return None
+    r = requests.post("https://oauth2.googleapis.com/token", data={
+        "client_id": cid, "client_secret": cs,
+        "refresh_token": rt, "grant_type": "refresh_token"
+    }, timeout=10)
+    if r.status_code == 200:
+        return r.json().get("access_token")
+    print(f"WARN GBP token: {r.status_code} {r.text[:150]}")
+    return None
 
-    # Step 2: Generate content via Claude API
+
+def post_to_gbp(title, bhtml, post_url, img_url):
+    token = get_gbp_access_token()
+    if not token:
+        print("GBP skipped - credentials not configured"); return
+    account_id  = os.environ.get("GBP_ACCOUNT_ID", "")
+    location_id = os.environ.get("GBP_LOCATION_ID", "")
+    if not account_id or not location_id:
+        print("GBP skipped - GBP_ACCOUNT_ID/GBP_LOCATION_ID not set"); return
+
+    summary = re.sub(r"<[^>]+>", " ", bhtml)
+    summary = re.sub(r"\s+", " ", summary).strip()[:1490]
+
+    payload = {
+        "topicType": "STANDARD",
+        "summary": summary,
+        "callToAction": {"actionType": "LEARN_MORE", "url": post_url},
+        "media": [{"mediaFormat": "PHOTO", "sourceUrl": img_url}],
+    }
+    url = (f"https://mybusiness.googleapis.com/v4/accounts/{account_id}"
+           f"/locations/{location_id}/localPosts")
+    r = requests.post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, timeout=15)
+    status = "OK" if r.status_code in (200, 201) else f"FAIL {r.status_code}: {r.text[:150]}"
+    print(f"GBP post - {status}")
+
+
+def publish_one(idx, known_slugs):
+    """Generate and publish one blog post. Returns new slug on success, None on failure."""
+    topic    = TOPICS[idx]
+    img      = IMG[idx % len(IMG)]
+    base_url = "https://ygvcashbuyers.com"
+    today    = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    print(f"\nTopic [{idx}]: {topic}")
     print("Calling Claude API...")
-    raw = generate_blog_post(topic, slugs)
+    raw = generate_blog_post(topic, known_slugs)
 
     title_m = re.search(r"^TITLE:\s*(.+)$", raw, re.M)
     slug_m  = re.search(r"^SLUG:\s*(.+)$",  raw, re.M)
     if not title_m or not slug_m:
-        print("ERROR: bad format from Claude"); print(raw[:500]); sys.exit(1)
+        print("ERROR: bad format from Claude"); print(raw[:500]); return None
 
-    title = title_m.group(1).strip()
-    slug  = re.sub(r"[^a-z0-9-]", "", slug_m.group(1).strip().lower().replace(" ", "-"))
-    bm    = re.search(r"---BODY---\n([\s\S]+?)(?=---FAQ---|\Z)", raw)
-    body  = bm.group(1).strip() if bm else ""
+    title    = title_m.group(1).strip()
+    slug     = re.sub(r"[^a-z0-9-]", "", slug_m.group(1).strip().lower().replace(" ", "-"))
+    bm       = re.search(r"---BODY---\n([\s\S]+?)(?=---FAQ---|\Z)", raw)
+    body     = bm.group(1).strip() if bm else ""
+    post_url = f"{base_url}/post/{slug}"
 
     faqs = []
     fm = re.search(r"---FAQ---\n([\s\S]+)", raw)
@@ -170,13 +245,8 @@ def main():
             if ln.startswith("Q: "):          cq = ln[3:]
             elif ln.startswith("A: ") and cq: faqs.append({"q": cq, "a": ln[3:]}); cq = None
 
-    # Step 3: Build HTML + all schemas
-    img   = IMG.get(idx, IMG[0])
     bhtml = to_html(body)
     wc    = len(re.sub(r"<[^>]+>", " ", bhtml).split())
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    base_url = "https://ygvcashbuyers.com"
-    post_url = f"{base_url}/post/{slug}"
 
     eeat = (
         '<div class="about-publisher"><p><strong>About YGV Cash Buyers:</strong> '
@@ -184,7 +254,6 @@ def main():
         "We buy homes in any condition — no repairs, no commissions, close in as little as 7 days. "
         '<a href="https://ygvcashbuyers.com">ygvcashbuyers.com</a>.</p></div>'
     )
-
     fqhtml = (
         "<h2>Frequently Asked Questions</h2><dl>\n" +
         "".join(f'<dt><strong>{f["q"]}</strong></dt><dd>{f["a"]}</dd>\n' for f in faqs) +
@@ -206,7 +275,6 @@ def main():
              "sameAs": "https://www.wikidata.org/wiki/Q486291"},
         ]
     })
-
     fqsc = sc({
         "@context": "https://schema.org", "@type": "FAQPage",
         "mainEntity": [
@@ -214,7 +282,6 @@ def main():
              "acceptedAnswer": {"@type": "Answer", "text": f["a"]}} for f in faqs
         ]
     }) if faqs else ""
-
     steps = [
         {"@type": "HowToStep", "name": m.group(1)}
         for m in re.finditer(r"<h2>(.*?)</h2>", bhtml)
@@ -223,7 +290,6 @@ def main():
     hwsc = sc({"@context": "https://schema.org", "@type": "HowTo",
                "name": topic, "step": steps}) \
         if steps and re.match(r"^how (to|the) ", topic, re.I) else ""
-
     bcsc = sc({
         "@context": "https://schema.org", "@type": "BreadcrumbList",
         "itemListElement": [
@@ -236,7 +302,7 @@ def main():
     html = f"<h1>{title}</h1>{bhtml}{eeat}{fqhtml}{bpsc}{fqsc}{hwsc}{bcsc}"
     print(f"Title: {title}\nSlug:  {slug}\nFAQs:  {len(faqs)}\nWords: {wc}\nHTML:  {len(html)} chars")
 
-    # Step 4: Publish to GoHighLevel
+    # Publish to GHL
     ghl_key = os.environ["GHL_API_KEY"]
     r = requests.post(
         "https://services.leadconnectorhq.com/blogs/posts",
@@ -250,48 +316,76 @@ def main():
             "tags": ["cash buyers", "Cincinnati", "sell house fast"],
         }
     )
-    if r.status_code in (200, 201):
-        post_id = r.json().get("blogPost", {}).get("_id", "")
-        print(f"GHL OK - {post_id}\n{post_url}")
-    else:
-        print(f"GHL FAIL - {r.status_code}: {r.text[:300]}"); sys.exit(1)
+    if r.status_code not in (200, 201):
+        print(f"GHL FAIL - {r.status_code}: {r.text[:300]}"); return None
 
-    # Step 5: Update sitemap on GitHub
-    gh_token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
+    post_id = r.json().get("blogPost", {}).get("_id", "")
+    print(f"GHL OK - {post_id}\n{post_url}")
+
+    # Post to GBP (optional — skipped if secrets not configured)
+    post_to_gbp(title, bhtml, post_url, img)
+
+    return slug
+
+
+def update_sitemap(gh_token, new_slugs, today):
+    base_url = "https://ygvcashbuyers.com"
     gh_url   = "https://api.github.com/repos/ygvholdings-cmd/ygv-sitemap/contents/sitemap.xml"
     gh_h     = {"Authorization": f"token {gh_token}", "User-Agent": "ygv-blog-publisher"}
     try:
         g = requests.get(gh_url, headers=gh_h, timeout=15)
-        if g.status_code == 200:
-            d   = g.json()
-            old = base64.b64decode(d["content"]).decode()
-            urls = list(dict.fromkeys(
-                [f"{base_url}/", f"{base_url}/blog", f"{base_url}/contact"] +
-                re.findall(r"<loc>(.*?)</loc>", old) +
-                [post_url]
-            ))
-            xml = (
-                '<?xml version="1.0" encoding="UTF-8"?>\n'
-                '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
-                "".join(
-                    f"  <url>\n    <loc>{u}</loc>\n    <lastmod>{today}</lastmod>\n  </url>\n"
-                    for u in urls
-                ) + "</urlset>"
-            )
-            p = requests.put(
-                gh_url,
-                headers={**gh_h, "Content-Type": "application/json"},
-                json={"message": f"Add /post/{slug}",
-                      "content": base64.b64encode(xml.encode()).decode(),
-                      "sha": d["sha"]}
-            )
-            print(f"GitHub sitemap - {p.status_code}")
-        else:
-            print(f"WARN GitHub: {g.status_code}")
+        if g.status_code != 200:
+            print(f"WARN GitHub: {g.status_code}"); return
+        d    = g.json()
+        old  = base64.b64decode(d["content"]).decode()
+        urls = list(dict.fromkeys(
+            [f"{base_url}/", f"{base_url}/blog", f"{base_url}/contact"] +
+            re.findall(r"<loc>(.*?)</loc>", old) +
+            [f"{base_url}/post/{s}" for s in new_slugs]
+        ))
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
+            "".join(
+                f"  <url>\n    <loc>{u}</loc>\n    <lastmod>{today}</lastmod>\n  </url>\n"
+                for u in urls
+            ) + "</urlset>"
+        )
+        p = requests.put(
+            gh_url,
+            headers={**gh_h, "Content-Type": "application/json"},
+            json={"message": "Add posts: " + ", ".join(f"/post/{s}" for s in new_slugs),
+                  "content": base64.b64encode(xml.encode()).decode(),
+                  "sha": d["sha"]}
+        )
+        print(f"GitHub sitemap - {p.status_code}")
     except Exception as e:
         print(f"WARN GitHub: {e}")
 
-    # Step 6: Ping Google
+
+def main():
+    slugs = get_published_slugs()
+    total = len(TOPICS)
+    print(f"Published: {len(slugs)}/{total} topics")
+
+    new_slugs = []
+    for run_num in range(2):
+        idx = (len(slugs) + len(new_slugs)) % total
+        if run_num > 0:
+            time.sleep(3)
+        new_slug = publish_one(idx, slugs + new_slugs)
+        if new_slug:
+            new_slugs.append(new_slug)
+
+    if not new_slugs:
+        print("ERROR: No posts published"); sys.exit(1)
+
+    # Single sitemap update covering both new posts
+    today    = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    gh_token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
+    update_sitemap(gh_token, new_slugs, today)
+
+    # Ping Google once
     try:
         pg = requests.get(
             "https://www.google.com/ping?sitemap=https%3A%2F%2Fygvcashbuyers.com%2Fsitemap.xml",
@@ -300,7 +394,9 @@ def main():
     except Exception:
         pass
 
-    print(f"\nDONE - {title}\n{post_url}")
+    print(f"\nDONE - {len(new_slugs)} post(s) published")
+    for s in new_slugs:
+        print(f"  https://ygvcashbuyers.com/post/{s}")
 
 
 if __name__ == "__main__":
