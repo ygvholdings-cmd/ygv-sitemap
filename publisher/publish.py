@@ -189,6 +189,25 @@ def get_gbp_access_token():
     return None
 
 
+def post_to_facebook(title, bhtml, post_url):
+    page_id    = os.environ.get("FB_PAGE_ID", "")
+    page_token = os.environ.get("FB_PAGE_ACCESS_TOKEN", "")
+    if not page_id or not page_token:
+        print("Facebook skipped - FB_PAGE_ID/FB_PAGE_ACCESS_TOKEN not set"); return
+    text   = re.sub(r"<[^>]+>", " ", bhtml)
+    text   = re.sub(r"\s+", " ", text).strip()
+    teaser = text[:400].rsplit(" ", 1)[0] + "..."
+    msg    = f"{title}\n\n{teaser}\n\nRead more: {post_url}"
+    r = requests.post(
+        f"https://graph.facebook.com/v19.0/{page_id}/feed",
+        json={"message": msg, "link": post_url},
+        params={"access_token": page_token},
+        timeout=15
+    )
+    status = "OK" if r.status_code in (200, 201) else f"FAIL {r.status_code}: {r.text[:150]}"
+    print(f"Facebook post - {status}")
+
+
 def post_to_gbp(title, bhtml, post_url, img_url):
     token = get_gbp_access_token()
     if not token:
@@ -324,6 +343,9 @@ def publish_one(idx, known_slugs):
 
     # Post to GBP (optional — skipped if secrets not configured)
     post_to_gbp(title, bhtml, post_url, img)
+
+    # Post to Facebook (optional — skipped if secrets not configured)
+    post_to_facebook(title, bhtml, post_url)
 
     return slug
 
