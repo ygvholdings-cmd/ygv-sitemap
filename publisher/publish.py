@@ -208,14 +208,47 @@ def post_to_facebook(title, bhtml, post_url):
     print(f"Facebook post - {status}")
 
 
+def discover_gbp_ids(token):
+    r = requests.get(
+        "https://mybusinessaccountmanagement.googleapis.com/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"}, timeout=10
+    )
+    if r.status_code != 200:
+        print(f"WARN GBP accounts: {r.status_code} {r.text[:150]}"); return None, None
+    accounts = r.json().get("accounts", [])
+    if not accounts:
+        print("WARN GBP: no accounts found"); return None, None
+    account_name = accounts[0]["name"]  # e.g. "accounts/123456789"
+    account_num  = account_name.split("/")[-1]
+    print(f"GBP account: {account_name}")
+    r2 = requests.get(
+        f"https://mybusinessbusinessinformation.googleapis.com/v1/{account_name}/locations",
+        params={"readMask": "name"},
+        headers={"Authorization": f"Bearer {token}"}, timeout=10
+    )
+    if r2.status_code != 200:
+        print(f"WARN GBP locations: {r2.status_code} {r2.text[:150]}"); return account_num, None
+    locations = r2.json().get("locations", [])
+    if not locations:
+        print("WARN GBP: no locations found"); return account_num, None
+    location_name = locations[0]["name"]  # e.g. "accounts/123/locations/456"
+    location_num  = location_name.split("/")[-1]
+    print(f"GBP location: {location_name}")
+    return account_num, location_num
+
+
 def post_to_gbp(title, bhtml, post_url, img_url):
     token = get_gbp_access_token()
     if not token:
         print("GBP skipped - credentials not configured"); return
-    account_id  = os.environ.get("GBP_ACCOUNT_ID", "")
-    location_id = os.environ.get("GBP_LOCATION_ID", "")
+
+    account_id  = os.environ.get("GBP_ACCOUNT_ID", "").strip().split("/")[-1]
+    location_id = os.environ.get("GBP_LOCATION_ID", "").strip().split("/")[-1]
+
     if not account_id or not location_id:
-        print("GBP skipped - GBP_ACCOUNT_ID/GBP_LOCATION_ID not set"); return
+        account_id, location_id = discover_gbp_ids(token)
+    if not account_id or not location_id:
+        print("GBP skipped - could not determine account/location"); return
 
     summary = re.sub(r"<[^>]+>", " ", bhtml)
     summary = re.sub(r"\s+", " ", summary).strip()[:1490]
