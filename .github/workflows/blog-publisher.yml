@@ -2,8 +2,9 @@ name: YGV Blog Publisher
 
 on:
   schedule:
+    # Mon, Wed, Fri at 12:00 UTC (8:00 AM EDT) — burst phase
     - cron: '0 12 * * 1,3,5'
-  workflow_dispatch:
+  workflow_dispatch:   # allow manual trigger from GitHub Actions UI
 
 permissions:
   contents: write
@@ -12,16 +13,29 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Check out sitemap repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Install dependencies
         run: pip install requests anthropic
+
       - name: Publish blog post
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GHL_API_KEY: ${{ secrets.GHL_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          GBP_ACCOUNT_ID: ${{ secrets.GBP_ACCOUNT_ID }}
+          GBP_LOCATION_ID: ${{ secrets.GBP_LOCATION_ID }}
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
         run: python publisher/publish.py
