@@ -109,11 +109,13 @@ def generate_blog_post(topic, slugs):
         f"a cash home buying company in Cincinnati, Ohio.\n\n"
         f"Topic: {topic}\n\n"
         f"Requirements:\n"
-        f"- 950-1150 words, warm and helpful tone, NOT salesy\n"
+        f"- 1400-1800 words, warm and helpful tone, NOT salesy\n"
         f"- First 2-3 sentences directly answer the topic (no preamble like 'In this post...')\n"
-        f"- Use ## for H2 subheadings throughout (4-6 subheadings)\n"
+        f"- Use ## for H2 subheadings throughout (5-8 subheadings)\n"
+        f"- Each H2 section should be 150-250 words with concrete, specific advice\n"
         f"- Do NOT include the post title in the body\n"
         f"- Reference Cincinnati, Hamilton County, or Greater Cincinnati naturally\n"
+        f"- Include at least one specific local detail (neighborhood, county process, local market fact)\n"
         f"- End with a soft CTA mentioning YGV Cash Buyers"
         f"{slug_hint}\n\n"
         f"Return ONLY in this exact format, no extra text before or after:\n"
@@ -133,12 +135,16 @@ def generate_blog_post(topic, slugs):
         f"Q: [question]\n"
         f"A: [answer in 1-2 sentences]\n"
         f"Q: [question]\n"
+        f"A: [answer in 1-2 sentences]\n"
+        f"Q: [question]\n"
+        f"A: [answer in 1-2 sentences]\n"
+        f"Q: [question]\n"
         f"A: [answer in 1-2 sentences]"
     )
 
     msg = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=3000,
+        model="claude-sonnet-5",
+        max_tokens=4500,
         messages=[{"role": "user", "content": prompt}]
     )
     return msg.content[0].text
