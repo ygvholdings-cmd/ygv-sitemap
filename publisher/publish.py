@@ -383,6 +383,72 @@ def publish_one(idx, known_slugs):
     return slug
 
 
+def submit_to_indexing_api(sa_key_json_str, slugs):
+    """Submit URLs to Google Indexing API using service account JWT auth."""
+    try:
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+    except ImportError:
+        import subprocess; subprocess.run(["pip","install","cryptography","-q"],check=True)
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+
+    if not sa_key_json_str:
+        print("Indexing API skipped - INDEXING_SA_KEY_JSON not set"); return
+
+    try:
+        sa = json.loads(sa_key_json_str)
+    except Exception as e:
+        print(f"WARN Indexing: bad SA key JSON: {e}"); return
+
+    now = int(time.time())
+    header  = {"alg": "RS256", "typ": "JWT"}
+    payload = {
+        "iss": sa["client_email"],
+        "scope": "https://www.googleapis.com/auth/indexing",
+        "aud": "https://oauth2.googleapis.com/token",
+        "exp": now + 3600, "iat": now,
+    }
+
+    def b64url(d):
+        return base64.urlsafe_b64encode(
+            json.dumps(d, separators=(',', ':')).encode()
+        ).rstrip(b'=').decode()
+
+    hdr_b64  = b64url(header)
+    pay_b64  = b64url(payload)
+    sign_in  = f"{hdr_b64}.{pay_b64}".encode()
+    priv_key = serialization.load_pem_private_key(sa["private_key"].encode(), password=None)
+    sig      = priv_key.sign(sign_in, asym_padding.PKCS1v15(), hashes.SHA256())
+    sig_b64  = base64.urlsafe_b64encode(sig).rstrip(b'=').decode()
+    jwt_tok  = f"{hdr_b64}.{pay_b64}.{sig_b64}"
+
+    tr = requests.post("https://oauth2.googleapis.com/token", data={
+        "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        "assertion": jwt_tok,
+    }, timeout=10)
+    if tr.status_code != 200:
+        print(f"WARN Indexing token: {tr.status_code} {tr.text[:150]}"); return
+    access_token = tr.json()["access_token"]
+
+    ok = fail = 0
+    for slug in slugs:
+        url = f"https://ygvcashbuyers.com/post/{slug}"
+        r = requests.post(
+            "https://indexing.googleapis.com/v3/urlNotifications:publish",
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+            json={"url": url, "type": "URL_UPDATED"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            ok += 1
+        else:
+            fail += 1
+            print(f"  WARN Indexing FAIL {slug} - {r.status_code}: {r.text[:100]}")
+        time.sleep(0.2)
+    print(f"Indexing API - {ok} submitted, {fail} failed")
+
+
 def update_sitemap(gh_token, new_slugs, today):
     base_url = "https://ygvcashbuyers.com"
     gh_url   = "https://api.github.com/repos/ygvholdings-cmd/ygv-sitemap/contents/sitemap.xml"
@@ -439,6 +505,13 @@ def main():
     today    = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     gh_token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
     update_sitemap(gh_token, new_slugs, today)
+
+    # Submit new posts to Google Indexing API
+    sa_key_json = os.environ.get("INDEXING_SA_KEY_JSON", "")
+    if sa_key_json:
+        submit_to_indexing_api(sa_key_json, new_slugs)
+    else:
+        print("Indexing API skipped - INDEXING_SA_KEY_JSON not set")
 
     # Ping Google once
     try:
