@@ -24,7 +24,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests anthropic
+        run: pip install requests anthropic cryptography
 
       - name: Publish blog post
         env:
@@ -38,4 +38,5 @@ jobs:
           GBP_LOCATION_ID: ${{ secrets.GBP_LOCATION_ID }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+          INDEXING_SA_KEY_JSON: ${{ secrets.INDEXING_SA_KEY_JSON }}
         run: python publisher/publish.py
