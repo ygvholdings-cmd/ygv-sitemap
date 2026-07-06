@@ -144,10 +144,11 @@ def generate_blog_post(topic, slugs):
 
     msg = client.messages.create(
         model="claude-sonnet-5",
-        max_tokens=4500,
+        max_tokens=6000,
         messages=[{"role": "user", "content": prompt}]
     )
-    return msg.content[0].text
+    text_block = next((b for b in msg.content if hasattr(b, 'text')), None)
+    return text_block.text if text_block else ""
 
 
 def to_html(txt):
