@@ -332,7 +332,11 @@ def publish_one(idx, known_slugs):
              "sameAs": "https://www.wikidata.org/wiki/Q43196"},
             {"@type": "Place", "name": "Hamilton County, Ohio",
              "sameAs": "https://www.wikidata.org/wiki/Q486291"},
-        ]
+        ],
+        "speakable": {
+            "@type": "SpeakableSpecification",
+            "cssSelector": ["h1", "p:first-of-type", ".faq-section dt"]
+        }
     })
     fqsc = sc({
         "@context": "https://schema.org", "@type": "FAQPage",
