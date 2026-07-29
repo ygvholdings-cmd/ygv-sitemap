@@ -2,8 +2,8 @@ name: YGV Blog Publisher
 
 on:
   schedule:
-    # Mon, Wed, Fri at 12:00 UTC (8:00 AM EDT) — burst phase
-    - cron: '0 12 * * 1,3,5'
+        # Every Monday at 12:00 UTC (8:00 AM EDT) — weekly freshness
+        - cron: '0 12 * * 1'
   workflow_dispatch:   # allow manual trigger from GitHub Actions UI
 
 permissions:
