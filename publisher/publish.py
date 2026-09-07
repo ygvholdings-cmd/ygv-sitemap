@@ -83,13 +83,30 @@ IMG = {
 
 
 def get_published_slugs():
+    """Fetch actual published post slugs directly from GHL — the authoritative source.
+
+    Previously this read from the GitHub-hosted sitemap mirror instead. That mirror's
+    own write (update_sitemap, below) fails silently on error, which let its post count
+    drift behind GHL's real count (seen: 56 vs 68 actual). Since the topic rotation index
+    is `len(slugs) % len(TOPICS)`, that drift caused already-used topics to be re-selected
+    long before all 40 had been covered, producing near-duplicate posts on the same topic.
+    Querying GHL directly can't drift out of sync with itself.
+    """
+    ghl_key = os.environ["GHL_API_KEY"]
+    headers = {"Authorization": f"Bearer {ghl_key}", "Version": "2021-07-28"}
     try:
         r = requests.get(
-            "https://raw.githubusercontent.com/ygvholdings-cmd/ygv-sitemap/main/sitemap.xml",
-            timeout=10)
-        return re.findall(r"ygvcashbuyers\.com/post/([^<\s]+)", r.text)
+            "https://services.leadconnectorhq.com/blogs/posts/list",
+            headers=headers,
+            params={"locationId": "fgK4QNPrkW9TsnxdOLjN", "blogId": "fp2IcYMIduN23MjmXgRE", "limit": 100},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            print(f"WARN GHL post list: {r.status_code} {r.text[:150]}"); return []
+        posts = r.json().get("blogPosts", [])
+        return [p["urlSlug"] for p in posts if p.get("urlSlug")]
     except Exception as e:
-        print(f"WARN sitemap fetch: {e}"); return []
+        print(f"WARN GHL post list fetch: {e}"); return []
 
 
 def generate_blog_post(topic, slugs):
@@ -461,38 +478,52 @@ def submit_to_indexing_api(sa_key_json_str, slugs):
 
 
 def update_sitemap(gh_token, new_slugs, today):
+    """Best-effort backup mirror of the sitemap on GitHub Pages.
+
+    Not authoritative for anything anymore (see get_published_slugs) — the real sitemap
+    lives on ygvcashbuyers.com/sitemap.xml via GHL's own XML Sitemap feature. Retries once
+    on a sha conflict so a transient race doesn't silently drop this run's posts from the
+    mirror the way it used to.
+    """
     base_url = "https://ygvcashbuyers.com"
     gh_url   = "https://api.github.com/repos/ygvholdings-cmd/ygv-sitemap/contents/sitemap.xml"
     gh_h     = {"Authorization": f"token {gh_token}", "User-Agent": "ygv-blog-publisher"}
-    try:
-        g = requests.get(gh_url, headers=gh_h, timeout=15)
-        if g.status_code != 200:
-            print(f"WARN GitHub: {g.status_code}"); return
-        d    = g.json()
-        old  = base64.b64decode(d["content"]).decode()
-        urls = list(dict.fromkeys(
-            [f"{base_url}/", f"{base_url}/blog", f"{base_url}/contact"] +
-            re.findall(r"<loc>(.*?)</loc>", old) +
-            [f"{base_url}/post/{s}" for s in new_slugs]
-        ))
-        xml = (
-            '<?xml version="1.0" encoding="UTF-8"?>\n'
-            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
-            "".join(
-                f"  <url>\n    <loc>{u}</loc>\n    <lastmod>{today}</lastmod>\n  </url>\n"
-                for u in urls
-            ) + "</urlset>"
-        )
-        p = requests.put(
-            gh_url,
-            headers={**gh_h, "Content-Type": "application/json"},
-            json={"message": "Add posts: " + ", ".join(f"/post/{s}" for s in new_slugs),
-                  "content": base64.b64encode(xml.encode()).decode(),
-                  "sha": d["sha"]}
-        )
-        print(f"GitHub sitemap - {p.status_code}")
-    except Exception as e:
-        print(f"WARN GitHub: {e}")
+
+    for attempt in range(2):
+        try:
+            g = requests.get(gh_url, headers=gh_h, timeout=15)
+            if g.status_code != 200:
+                print(f"WARN GitHub sitemap fetch: {g.status_code}"); return
+            d    = g.json()
+            old  = base64.b64decode(d["content"]).decode()
+            urls = list(dict.fromkeys(
+                [f"{base_url}/", f"{base_url}/blog", f"{base_url}/contact"] +
+                re.findall(r"<loc>(.*?)</loc>", old) +
+                [f"{base_url}/post/{s}" for s in new_slugs]
+            ))
+            xml = (
+                '<?xml version="1.0" encoding="UTF-8"?>\n'
+                '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
+                "".join(
+                    f"  <url>\n    <loc>{u}</loc>\n    <lastmod>{today}</lastmod>\n  </url>\n"
+                    for u in urls
+                ) + "</urlset>"
+            )
+            p = requests.put(
+                gh_url,
+                headers={**gh_h, "Content-Type": "application/json"},
+                json={"message": "Add posts: " + ", ".join(f"/post/{s}" for s in new_slugs),
+                      "content": base64.b64encode(xml.encode()).decode(),
+                      "sha": d["sha"]}
+            )
+            print(f"GitHub sitemap - {p.status_code}")
+            if p.status_code in (200, 201) or attempt == 1:
+                return
+            print(f"WARN GitHub sitemap PUT: {p.status_code} {p.text[:150]} - retrying with fresh sha")
+        except Exception as e:
+            print(f"WARN GitHub sitemap: {e}")
+            if attempt == 1:
+                return
 
 
 def main():
