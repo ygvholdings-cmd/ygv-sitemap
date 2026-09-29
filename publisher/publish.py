@@ -58,6 +58,9 @@ TOPICS = [
     "cash home buyers in College Hill Cincinnati Ohio",
 ]
 
+GHL_CATEGORY_ID = "6abbc7c8e1ac9e6cde4af85e"  # "Home Selling Tips" — created once via REIReply UI
+GHL_AUTHOR_ID   = "6abbc8647e0007f3be23ed73"  # "YGV Cash Buyers" — created once via REIReply UI
+
 IMG = {
     0:  "https://images.pexels.com/photos/8469940/pexels-photo-8469940.jpeg?auto=compress&cs=tinysrgb&w=1200",
     1:  "https://images.pexels.com/photos/32497163/pexels-photo-32497163.jpeg?auto=compress&cs=tinysrgb&w=1200",
@@ -138,6 +141,9 @@ def generate_blog_post(topic, slugs):
         f"Return ONLY in this exact format, no extra text before or after:\n"
         f"TITLE: compelling SEO title (50-60 chars)\n"
         f"SLUG: url-slug-here\n"
+        f"META: search-result snippet that earns clicks, 140-160 chars, mentions Cincinnati "
+        f"and the core benefit (fast cash offer, no repairs/fees), ends with a soft CTA\n"
+        f"IMAGE_ALT: one-sentence accessibility description of a photo that would illustrate this topic\n"
         f"---BODY---\n"
         f"[full post body with ## headings]\n"
         f"---FAQ---\n"
@@ -232,6 +238,43 @@ def post_to_facebook(title, bhtml, post_url):
     print(f"Facebook post - {status}")
 
 
+def update_post_seo_metadata(post_id, description, image_alt):
+    """Set meta description, image alt text, category, and author on a just-created post.
+
+    The create endpoint (POST /blogs/posts) doesn't take these fields, but the update
+    endpoint (PUT /blogs/posts/{id}) does — under different names than the ones that get
+    rejected (metaTitle/metaDescription/metaTags all 422 with "property X should not exist").
+    Confirmed working 2026-09-29 by inspecting a GET /blogs/posts/list response:
+      - description   (str)             -> meta description
+      - imageAltText  (str)             -> cover image alt text
+      - categories    (list[str])       -> category ID(s) — NOT the full {_id,label,urlSlug}
+                                            objects the GET response shows; sending objects
+                                            here returns 200 but corrupts the post (live page
+                                            then 404s: "Unsupported conversion from object to
+                                            objectId in $convert with no onError value")
+      - author        (str)             -> author ID — NOT the full object either
+    Category/author records themselves are created once via the REIReply blog editor UI
+    (GHL_CATEGORY_ID / GHL_AUTHOR_ID above), not through this API.
+    """
+    ghl_key = os.environ["GHL_API_KEY"]
+    r = requests.put(
+        f"https://services.leadconnectorhq.com/blogs/posts/{post_id}",
+        headers={"Authorization": f"Bearer {ghl_key}", "Content-Type": "application/json",
+                 "Version": "2021-07-28"},
+        json={
+            "locationId": "fgK4QNPrkW9TsnxdOLjN", "blogId": "fp2IcYMIduN23MjmXgRE",
+            "status": "PUBLISHED",
+            "description": description[:250],
+            "imageAltText": image_alt,
+            "categories": [GHL_CATEGORY_ID],
+            "author": GHL_AUTHOR_ID,
+        },
+        timeout=15,
+    )
+    status = "OK" if r.status_code == 200 else f"FAIL {r.status_code}: {r.text[:150]}"
+    print(f"SEO metadata - {status}")
+
+
 def discover_gbp_ids(token):
     r = requests.get(
         "https://mybusinessaccountmanagement.googleapis.com/v1/accounts",
@@ -308,6 +351,10 @@ def publish_one(idx, known_slugs):
 
     title    = title_m.group(1).strip()
     slug     = re.sub(r"[^a-z0-9-]", "", slug_m.group(1).strip().lower().replace(" ", "-"))
+    meta_m   = re.search(r"^META:\s*(.+)$", raw, re.M)
+    alt_m    = re.search(r"^IMAGE_ALT:\s*(.+)$", raw, re.M)
+    meta_description = meta_m.group(1).strip() if meta_m else f"{title} — YGV Cash Buyers, Cincinnati."
+    image_alt = alt_m.group(1).strip() if alt_m else title
     bm       = re.search(r"---BODY---\n([\s\S]+?)(?=---FAQ---|\Z)", raw)
     body     = bm.group(1).strip() if bm else ""
     post_url = f"{base_url}/post/{slug}"
@@ -401,6 +448,10 @@ def publish_one(idx, known_slugs):
 
     post_id = r.json().get("blogPost", {}).get("_id", "")
     print(f"GHL OK - {post_id}\n{post_url}")
+
+    # Set meta description / alt text / category / author (rejected on create, accepted on update)
+    if post_id:
+        update_post_seo_metadata(post_id, meta_description, image_alt)
 
     # Post to GBP (optional — skipped if secrets not configured)
     post_to_gbp(title, bhtml, post_url, img)
