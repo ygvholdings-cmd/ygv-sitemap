@@ -166,7 +166,7 @@ def generate_blog_post(topic, slugs):
     )
 
     msg = client.messages.create(
-        model="claude-sonnet-5",
+        model="claude-sonnet-5-5",
         max_tokens=6000,
         messages=[{"role": "user", "content": prompt}]
     )
