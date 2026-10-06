@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """YGV Cash Buyers - Automated Blog Publisher (GitHub Actions)"""
-import os, re, sys, json, base64, time
+import os, re, sys, json, base64, time, random
 from datetime import datetime, timezone
 
 try:
@@ -85,6 +85,37 @@ IMG = {
 }
 
 
+def fetch_all_ghl_posts():
+    """Return every post from GHL's list endpoint, paginating with limit/offset.
+
+    The endpoint caps a page at 100. A single un-paginated call silently truncates once the
+    blog passes 100 posts, which would make the topic-rotation index (len(slugs) % len(TOPICS))
+    stop advancing correctly. Returns None on API failure so callers can tell "no posts"
+    apart from "couldn't fetch".
+    """
+    ghl_key = os.environ["GHL_API_KEY"]
+    headers = {"Authorization": f"Bearer {ghl_key}", "Version": "2021-07-28"}
+    posts, offset, page = [], 0, 100
+    try:
+        while True:
+            r = requests.get(
+                "https://services.leadconnectorhq.com/blogs/posts/list",
+                headers=headers,
+                params={"locationId": "fgK4QNPrkW9TsnxdOLjN", "blogId": "fp2IcYMIduN23MjmXgRE",
+                        "limit": page, "offset": offset},
+                timeout=15,
+            )
+            if r.status_code != 200:
+                print(f"WARN GHL post list: {r.status_code} {r.text[:150]}"); return None
+            batch = r.json().get("blogPosts", [])
+            posts.extend(batch)
+            if len(batch) < page:
+                return posts
+            offset += page
+    except Exception as e:
+        print(f"WARN GHL post list fetch: {e}"); return None
+
+
 def get_published_slugs():
     """Fetch actual published post slugs directly from GHL — the authoritative source.
 
@@ -95,21 +126,29 @@ def get_published_slugs():
     long before all 40 had been covered, producing near-duplicate posts on the same topic.
     Querying GHL directly can't drift out of sync with itself.
     """
-    ghl_key = os.environ["GHL_API_KEY"]
-    headers = {"Authorization": f"Bearer {ghl_key}", "Version": "2021-07-28"}
-    try:
-        r = requests.get(
-            "https://services.leadconnectorhq.com/blogs/posts/list",
-            headers=headers,
-            params={"locationId": "fgK4QNPrkW9TsnxdOLjN", "blogId": "fp2IcYMIduN23MjmXgRE", "limit": 100},
-            timeout=15,
-        )
-        if r.status_code != 200:
-            print(f"WARN GHL post list: {r.status_code} {r.text[:150]}"); return []
-        posts = r.json().get("blogPosts", [])
-        return [p["urlSlug"] for p in posts if p.get("urlSlug")]
-    except Exception as e:
-        print(f"WARN GHL post list fetch: {e}"); return []
+    posts = fetch_all_ghl_posts() or []
+    return [p["urlSlug"] for p in posts if p.get("urlSlug")]
+
+
+def published_within_days(days):
+    """True if GHL already has a post published in the last `days` days.
+
+    Used to make the Tue/Wed fallback cron runs idempotent: they only publish if Monday's
+    run never happened. Fails open (returns False) if GHL can't be queried, since a missed
+    week is worse than the small risk of an extra pair of posts.
+    """
+    posts = fetch_all_ghl_posts()
+    if not posts:
+        return False
+    cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+    for p in posts:
+        try:
+            ts = datetime.fromisoformat(p["publishedAt"].replace("Z", "+00:00")).timestamp()
+        except (KeyError, ValueError, AttributeError):
+            continue
+        if ts >= cutoff:
+            return True
+    return False
 
 
 def generate_blog_post(topic, slugs):
@@ -351,6 +390,11 @@ def publish_one(idx, known_slugs):
 
     title    = title_m.group(1).strip()
     slug     = re.sub(r"[^a-z0-9-]", "", slug_m.group(1).strip().lower().replace(" ", "-"))
+    if slug in known_slugs:
+        # Second+ pass through TOPICS regenerates the same slug. GHL silently renames the new
+        # post (e.g. -4787) while the JSON-LD canonical, GBP link, Indexing API and sitemap
+        # all kept pointing at the OLD post. Suffix it ourselves, before post_url is built.
+        slug = f"{slug}-{random.randint(1000, 9999)}"
     meta_m   = re.search(r"^META:\s*(.+)$", raw, re.M)
     alt_m    = re.search(r"^IMAGE_ALT:\s*(.+)$", raw, re.M)
     meta_description = meta_m.group(1).strip() if meta_m else f"{title} — YGV Cash Buyers, Cincinnati."
@@ -447,6 +491,10 @@ def publish_one(idx, known_slugs):
         print(f"GHL FAIL - {r.status_code}: {r.text[:300]}"); return None
 
     post_id = r.json().get("blogPost", {}).get("_id", "")
+    actual_slug = r.json().get("blogPost", {}).get("urlSlug", "")
+    if actual_slug and actual_slug != slug:
+        print(f"WARN GHL renamed slug {slug} -> {actual_slug}; using GHL's")
+        slug, post_url = actual_slug, f"{base_url}/post/{actual_slug}"
     print(f"GHL OK - {post_id}\n{post_url}")
 
     # Set meta description / alt text / category / author (rejected on create, accepted on update)
@@ -578,6 +626,13 @@ def update_sitemap(gh_token, new_slugs, today):
 
 
 def main():
+    # Scheduled runs fire Mon + Tue + Wed (see blog-publisher.yml); Tue/Wed exist only to
+    # recover a Monday run GitHub failed to start (seen 2026-10-05: "job was not acquired by
+    # Runner"). Skip if this week already has posts. Manual dispatch always publishes.
+    if os.environ.get("GITHUB_EVENT_NAME") == "schedule" and published_within_days(5):
+        print("Already published within the last 5 days - nothing to do this run.")
+        return
+
     slugs = get_published_slugs()
     total = len(TOPICS)
     print(f"Published: {len(slugs)}/{total} topics")
