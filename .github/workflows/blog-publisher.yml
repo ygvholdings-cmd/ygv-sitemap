@@ -2,9 +2,17 @@ name: YGV Blog Publisher
 
 on:
   schedule:
-        # Every Monday at 12:00 UTC (8:00 AM EDT) — weekly freshness
-        - cron: '0 12 * * 1'
-  workflow_dispatch:   # allow manual trigger from GitHub Actions UI
+    # Monday 12:00 UTC (8:00 AM EDT) is the real run. Tue/Wed 15:00 UTC are fallbacks: GitHub
+    # occasionally fails to start a hosted-runner job at all (2026-10-05: "job was not
+    # acquired by Runner"), losing the whole week. publish.py skips these two when a post
+    # already went out in the last 5 days, so they never double-publish.
+    - cron: '0 12 * * 1'
+    - cron: '0 15 * * 2,3'
+  workflow_dispatch:   # manual trigger from GitHub Actions UI - always publishes
+
+concurrency:
+  group: blog-publisher
+  cancel-in-progress: false   # never cancel a run mid-publish; queue the next one instead
 
 permissions:
   contents: write
