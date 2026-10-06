@@ -56,7 +56,81 @@ TOPICS = [
     "sell your house fast in Cheviot Ohio",
     "how to sell a home in Price Hill Cincinnati",
     "cash home buyers in College Hill Cincinnati Ohio",
+    # Series 2 (40+): fresh angles added 2026-10-06 once the first 40 had been used ~twice over.
+    # Situations - each targets a distinct seller problem not covered above.
+    "how to sell a vacant house in Cincinnati Ohio",
+    "selling a house with foundation problems in Cincinnati",
+    "selling a fire-damaged house in Cincinnati for cash",
+    "selling a house with mold or water damage in Cincinnati",
+    "selling a house with tenants still living in it in Ohio",
+    "selling a house with unpaid property taxes in Hamilton County Ohio",
+    "selling a house with a reverse mortgage in Ohio",
+    "what to do when you owe more than your house is worth in Cincinnati",
+    "selling a house with an old or leaking roof in Cincinnati",
+    "selling a rental house after a bad tenant or eviction in Ohio",
+    "selling an inherited house when siblings disagree in Ohio",
+    "how to sell a house without a realtor in Ohio",
+    "how much do cash home buyers pay in Cincinnati",
+    "how to tell if a cash home buyer is legitimate in Ohio",
+    "how long does it take to sell a house in Cincinnati",
+    "who pays closing costs when you sell a house in Ohio",
+    "Ohio seller disclosure requirements explained",
+    "do you need repairs or a home inspection before selling in Ohio",
+    "selling a house during bankruptcy in Ohio",
+    "what happens at a sheriff sale in Hamilton County Ohio",
+    "selling the family home after the death of a spouse in Cincinnati",
+    "selling your house to pay for assisted living or nursing care in Ohio",
+    "selling an outdated house without renovating in Cincinnati",
+    "what to do when a buyer backs out of your Cincinnati home sale",
+    "best time of year to sell a house in Cincinnati",
+    "selling a house in winter in Cincinnati",
+    "cash offer vs conventional financing which closes faster in Ohio",
+    "selling a house with an open building permit in Ohio",
+    "selling a house with no will when the owner died intestate in Ohio",
+    "selling an inherited Cincinnati house when you live out of state",
+    "selling an older Cincinnati home with lead paint or asbestos",
+    # Neighborhoods and suburbs
+    "sell my house fast in Springdale Ohio",
+    "cash home buyers in Forest Park Ohio",
+    "sell your house fast in Glendale Ohio",
+    "cash buyers for homes in Wyoming Ohio",
+    "how to sell a house fast in Silverton Ohio",
+    "sell my house fast in Deer Park Ohio",
+    "cash home buyers in Evendale Ohio",
+    "selling a home in Indian Hill Ohio for cash",
+    "sell your house fast in Mariemont Ohio",
+    "cash home buyers in Delhi Township Ohio",
+    "sell my house fast in Green Township Ohio",
+    "cash buyers for homes in Westwood Cincinnati",
+    "how to sell a house fast in Cleves Ohio",
+    "sell my house fast in Harrison Ohio",
+    "cash home buyers in Miami Township Ohio",
+    "sell your house fast in Batavia Ohio",
+    "cash buyers for homes in Amelia Ohio",
+    "how to sell a house fast in Union Township Ohio",
+    "sell my house fast in Springfield Township Ohio",
+    "cash home buyers in Mt. Healthy Ohio",
+    "sell your house fast in Finneytown Ohio",
+    "cash buyers for homes in Pleasant Ridge Cincinnati",
+    "how to sell a house fast in Madisonville Cincinnati",
+    "sell my house fast in Mt. Lookout Cincinnati",
+    "cash home buyers in Northside Cincinnati",
+    "sell your house fast in Clifton Cincinnati",
+    "cash buyers for homes in Walnut Hills Cincinnati",
+    "how to sell a house fast in Avondale Cincinnati",
+    "sell my house fast in Sayler Park Cincinnati",
+    "cash home buyers in St. Bernard Ohio",
+    "sell your house fast in Greenhills Ohio",
+    "cash buyers for homes in North College Hill Ohio",
+    "how to sell a house fast in Lebanon Ohio",
+    "sell my house fast in Hamilton Ohio",
+    "cash home buyers in Middletown Ohio",
 ]
+
+# Posts published on/after this instant belong to series 2; the next topic index is
+# SERIES2_START_IDX + (number of such posts), derived from GHL itself so it cannot drift.
+SERIES2_START_IDX = 40
+SERIES2_CUTOVER   = "2026-10-07T00:00:00+00:00"
 
 GHL_CATEGORY_ID = "6abbc7c8e1ac9e6cde4af85e"  # "Home Selling Tips" — created once via REIReply UI
 GHL_AUTHOR_ID   = "6abbc8647e0007f3be23ed73"  # "YGV Cash Buyers" — created once via REIReply UI
@@ -633,13 +707,29 @@ def main():
         print("Already published within the last 5 days - nothing to do this run.")
         return
 
-    slugs = get_published_slugs()
-    total = len(TOPICS)
-    print(f"Published: {len(slugs)}/{total} topics")
+    posts = fetch_all_ghl_posts()
+    if posts is None:
+        # Without the list we can't know which topics are used; guessing would repeat topics.
+        print("ERROR: could not read existing posts from GHL - aborting rather than guess"); sys.exit(1)
+    slugs = [p["urlSlug"] for p in posts if p.get("urlSlug")]
+    cutover = datetime.fromisoformat(SERIES2_CUTOVER).timestamp()
+    def _after_cutover(p):
+        try:
+            return datetime.fromisoformat(p["publishedAt"].replace("Z", "+00:00")).timestamp() >= cutover
+        except (KeyError, ValueError, AttributeError):
+            return False
+    base_idx = SERIES2_START_IDX + sum(1 for p in posts if _after_cutover(p))
+    print(f"Existing posts: {len(slugs)} | next topic index {base_idx} of {len(TOPICS)}")
 
     new_slugs = []
     for run_num in range(2):
-        idx = (len(slugs) + len(new_slugs)) % total
+        idx = base_idx + len(new_slugs)
+        if idx >= len(TOPICS):
+            # Never fall back to re-using topics - that produced ~36 near-duplicate posts that
+            # compete with each other in search. Fail loudly so GitHub emails the owner; fix by
+            # appending new topics to TOPICS.
+            print(f"TOPICS EXHAUSTED at index {idx} - add more topics to TOPICS in publish.py")
+            break
         if run_num > 0:
             time.sleep(3)
         new_slug = publish_one(idx, slugs + new_slugs)
