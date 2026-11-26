@@ -225,16 +225,40 @@ def published_within_days(days):
     return False
 
 
-def generate_blog_post(topic, slugs):
+# Posts whose canonicalLink points at another post (see consolidate_duplicates.py, 2026-11-02).
+# The list endpoint doesn't return canonicalLink, so they're named here; never offer them as link targets.
+CANONICALIZED = frozenset([
+    "avoid-foreclosure-cincinnati-guide", "cash-buyers-oakley-cincinnati-ohio-2013", "cash-home-buyers-sharonville-ohio",
+    "cash-home-buying-process-cincinnati", "cash-home-buying-process-step-by-step", "cash-offer-vs-listing-agent-cincinnati",
+    "downsizing-cincinnati-tips-selling-home-fast", "estate-sales-probate-property-cincinnati",
+    "estate-sales-probate-property-cincinnati-ohio-8760", "estate-sales-probate-property-cincinnati-ohio-9865",
+    "estate-sales-probate-property-cincinnati-ohio-9982", "fair-cash-offer-cincinnati-home",
+    "liens-title-issues-selling-home-cincinnati-6366", "liens-title-issues-selling-home-cincinnati-9171",
+    "liens-title-issues-selling-home-cincinnati-9227", "mistakes-selling-home-fast-cincinnati", "sell-home-fast-montgomery-ohio",
+    "sell-home-madeira-ohio-cash-2313", "sell-house-fast-colerain-township-ohio", "sell-house-fast-kenwood-cincinnati-ohio",
+    "sell-house-fast-milford-ohio", "sell-house-fast-symmes-township-ohio-7882", "sell-rental-property-fast-cincinnati-2064",
+    "selling-damaged-distressed-home-cash-cincinnati", "selling-damaged-home-for-cash-cincinnati", "selling-hoarder-house-cincinnati",
+    "selling-hoarder-house-cincinnati-guide", "selling-house-as-is-meaning-cincinnati", "selling-house-during-divorce-cincinnati-8288",
+    "selling-inherited-home-cincinnati-ohio-guide", "what-cash-buyers-look-for-cincinnati-homes",
+    "what-cash-home-buyers-look-for-cincinnati-9927", "what-happens-after-accepting-cash-offer-cincinnati",
+    "why-cincinnati-homeowners-choose-cash-buyers-over-realtors",
+])
+
+
+def generate_blog_post(topic, link_targets):
+    """link_targets: [(title, url)] of live, self-canonical posts the new post may link to."""
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
+    # Until 2026-11-26 this passed only the 15 oldest slugs and never asked for link syntax, so most posts
+    # said "our guide on X" in plain text with no link (22 of 90 posts had any internal link). Pass every
+    # post with its title and require markdown links, which to_html() turns into <a> tags.
     slug_hint = ""
-    if len(slugs) >= 3:
+    if len(link_targets) >= 3:
         slug_hint = (
-            "\nFor internal linking, naturally embed 2-3 links within the body to these "
-            "published posts where topically relevant "
-            "(use full URL format: https://ygvcashbuyers.com/post/SLUG): "
-            + ", ".join(slugs[:15])
+            "\n- Internal links: embed 3-5 links in the body to the most topically related posts below, "
+            "written as markdown [descriptive anchor text](URL). Use only URLs from this list, never the same URL twice, "
+            "and never write 'our guide/article on ...' without making it one of these links:\n"
+            + "\n".join(f"  {t} -> {u}" for t, u in link_targets)
         )
 
     prompt = (
@@ -446,7 +470,7 @@ def post_to_gbp(title, bhtml, post_url, img_url):
     print(f"GBP post - {status}")
 
 
-def publish_one(idx, known_slugs):
+def publish_one(idx, known_slugs, link_targets):
     """Generate and publish one blog post. Returns new slug on success, None on failure."""
     topic    = TOPICS[idx]
     img      = IMG[idx % len(IMG)]
@@ -455,7 +479,7 @@ def publish_one(idx, known_slugs):
 
     print(f"\nTopic [{idx}]: {topic}")
     print("Calling Claude API...")
-    raw = generate_blog_post(topic, known_slugs)
+    raw = generate_blog_post(topic, link_targets)
 
     title_m = re.search(r"^TITLE:\s*(.+)$", raw, re.M)
     slug_m  = re.search(r"^SLUG:\s*(.+)$",  raw, re.M)
@@ -488,6 +512,8 @@ def publish_one(idx, known_slugs):
 
     bhtml = to_html(body)
     wc    = len(re.sub(r"<[^>]+>", " ", bhtml).split())
+    n_links = len(set(re.findall(r'href="https://ygvcashbuyers\.com/post/[^"]+"', bhtml)))
+    print(f"Internal links: {n_links}" + ("  WARN fewer than 2 - check the prompt/model output" if n_links < 2 else ""))
 
     eeat = (
         '<div class="about-publisher"><p><strong>About YGV Cash Buyers:</strong> '
@@ -720,6 +746,8 @@ def main():
             return False
     base_idx = SERIES2_START_IDX + sum(1 for p in posts if _after_cutover(p))
     print(f"Existing posts: {len(slugs)} | next topic index {base_idx} of {len(TOPICS)}")
+    link_targets = [(p.get("title", ""), f"https://ygvcashbuyers.com/post/{p['urlSlug']}")
+                    for p in posts if p.get("urlSlug") and p["urlSlug"] not in CANONICALIZED]
 
     new_slugs = []
     for run_num in range(2):
@@ -732,7 +760,7 @@ def main():
             break
         if run_num > 0:
             time.sleep(3)
-        new_slug = publish_one(idx, slugs + new_slugs)
+        new_slug = publish_one(idx, slugs + new_slugs, link_targets)
         if new_slug:
             new_slugs.append(new_slug)
 
